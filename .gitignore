@@ -32,9 +32,16 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
+
+data/store.json
+public/sw.js
+public/sw.js.map
+public/swe-worker-*.js
 
 # vercel
 .vercel
+/dist/
 
 # typescript
 *.tsbuildinfo
