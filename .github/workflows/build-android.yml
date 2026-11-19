@@ -1,0 +1,145 @@
+name: Build Android (APK & AAB)
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: 'URL de producción de la web (ej: https://sibic.vercel.app)'
+        required: false
+        default: ''
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK and AAB
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+
+      - name: Setup Capacitor Server URL
+        run: |
+          if [ -n "${{ inputs.server_url }}" ]; then
+            echo "CAPACITOR_SERVER_URL=${{ inputs.server_url }}" >> $GITHUB_ENV
+          elif [ -n "${{ vars.CAPACITOR_SERVER_URL }}" ]; then
+            echo "CAPACITOR_SERVER_URL=${{ vars.CAPACITOR_SERVER_URL }}" >> $GITHUB_ENV
+          elif [ -n "${{ secrets.CAPACITOR_SERVER_URL }}" ]; then
+            echo "CAPACITOR_SERVER_URL=${{ secrets.CAPACITOR_SERVER_URL }}" >> $GITHUB_ENV
+          fi
+
+      - name: Sync Capacitor Android
+        run: npx cap sync android
+
+      - name: Make Gradle executable
+        run: chmod +x android/gradlew
+
+      - name: Build Debug APK (Listo para instalar en cualquier teléfono)
+        run: |
+          cd android
+          ./gradlew assembleDebug
+
+      - name: Build Release APK and AAB (Bundle para Google Play)
+        run: |
+          cd android
+          ./gradlew assembleRelease
+          ./gradlew bundleRelease
+
+      - name: Sign Release APK & AAB (si existen secretos de keystore)
+        id: sign_app
+        run: |
+          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -n 1)
+          echo "Using Android build-tools from: $BUILD_TOOLS"
+
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "Signing with provided release keystore..."
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+            
+            # Sign AAB
+            jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+              -keystore release.keystore \
+              -storepass "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+              -keypass "${{ secrets.ANDROID_KEY_PASSWORD }}" \
+              android/app/build/outputs/bundle/release/app-release.aab \
+              "${{ secrets.ANDROID_KEY_ALIAS }}"
+
+            # Align & Sign Release APK
+            $BUILD_TOOLS/zipalign -v -p 4 \
+              android/app/build/outputs/apk/release/app-release-unsigned.apk \
+              android/app/build/outputs/apk/release/app-release-aligned.apk
+
+            $BUILD_TOOLS/apksigner sign \
+              --ks release.keystore \
+              --ks-pass "pass:${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" \
+              --key-pass "pass:${{ secrets.ANDROID_KEY_PASSWORD }}" \
+              --ks-key-alias "${{ secrets.ANDROID_KEY_ALIAS }}" \
+              --out android/app/build/outputs/apk/release/sibic-release-signed.apk \
+              android/app/build/outputs/apk/release/app-release-aligned.apk
+            
+            echo "signed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No release keystore found. Building self-signed release APK for testing..."
+            keytool -genkey -v -keystore temp.keystore -alias tempkey -keyalg RSA -keysize 2048 -validity 10000 -storepass temppass -keypass temppass -dname "CN=SIBIC, OU=Dev, O=SIBIC, L=MX, S=MX, C=MX"
+            
+            $BUILD_TOOLS/zipalign -v -p 4 \
+              android/app/build/outputs/apk/release/app-release-unsigned.apk \
+              android/app/build/outputs/apk/release/app-release-aligned.apk || cp android/app/build/outputs/apk/release/app-release-unsigned.apk android/app/build/outputs/apk/release/app-release-aligned.apk
+
+            $BUILD_TOOLS/apksigner sign \
+              --ks temp.keystore \
+              --ks-pass pass:temppass \
+              --key-pass pass:temppass \
+              --out android/app/build/outputs/apk/release/sibic-release-signed.apk \
+              android/app/build/outputs/apk/release/app-release-aligned.apk
+            
+            echo "signed=self" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare Assets for Distribution
+        run: |
+          mkdir -p dist
+          # APK Debug (instalable directamente en cualquier dispositivo)
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/sibic-debug.apk
+          
+          # APK Release firmado
+          if [ -f android/app/build/outputs/apk/release/sibic-release-signed.apk ]; then
+            cp android/app/build/outputs/apk/release/sibic-release-signed.apk dist/sibic-release.apk
+          fi
+          
+          # AAB (Android App Bundle para subir a Google Play Console)
+          cp android/app/build/outputs/bundle/release/app-release.aab dist/sibic.aab
+
+      - name: Upload Artifacts to Actions
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-builds
+          path: dist/*
+
+      - name: Attach Assets to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
