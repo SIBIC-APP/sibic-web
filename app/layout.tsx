@@ -63,14 +63,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           media="screen and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
         />
       </head>
-      <body className="min-h-dvh bg-white text-navy">
+      <body className="h-full bg-white text-navy">
         <Script id="sibic-splash" strategy="beforeInteractive">
           {`try{if(sessionStorage.getItem("sibic-splash-seen")==="1"){var s=document.createElement("style");s.id="sibic-splash-off";s.textContent="[data-splash-screen]{display:none!important}";document.head.appendChild(s)}}catch(e){}`}
         </Script>
         <Providers>
-          <div className="relative flex h-dvh w-full flex-col overflow-hidden bg-[#f6f7fb] lg:flex-row">
+          <div className="fixed inset-0 flex w-full flex-col overflow-hidden bg-[#f6f7fb] lg:flex-row">
             <SplashScreen />
-            <div className="min-h-0 flex-1 overflow-y-auto lg:order-2">{children}</div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain lg:order-2">{children}</div>
             <Suspense
               fallback={
                 <div className="h-16 shrink-0 border-t border-slate-100 bg-white lg:order-1 lg:h-full lg:w-60 lg:border-t-0 lg:border-r" />

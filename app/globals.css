@@ -129,6 +129,13 @@
   html {
     @apply font-sans;
   }
+  /* La app hace scroll dentro de su propio contenedor. El documento no se
+     desplaza ni rebota, así que "tirar para recargar" no mueve la barra. */
+  html,
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
 }
 
 @layer components {
